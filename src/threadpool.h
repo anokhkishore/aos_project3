@@ -4,12 +4,20 @@
 #include <condition_variable>
 #include <thread>
 #include <vector>
+#include <future>
 
 class threadpool {
 public:
 	threadpool(int num_threads, void (*thread_function)(void*));
     void enqueue_task(void *task_args);
+    
+    /*
+    template<typename T>
+    std::future<T> enqueue_task(void *task_args, std::promise<T>&& promise);
+    */
+
     void wait_for_all_tasks();
+    void kill_threads();
 
     ~threadpool();
 private:

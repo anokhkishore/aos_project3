@@ -38,9 +38,7 @@ void threadpool::wait_for_all_tasks() {
     cv_task_done.wait(lock, [this]{ return task_queue.empty();});
 }
 
-
-threadpool::~threadpool() {
-    printf("threadpool Destructor\n");
+void threadpool::kill_threads(){
     {
         std::lock_guard<std::mutex> lock(mtx_);
         stop_workers = true;
@@ -53,4 +51,10 @@ threadpool::~threadpool() {
             threads[i].join();
         }
     }
+}
+
+threadpool::~threadpool() {
+    printf("threadpool Destructor\n");
+    kill_threads();
+    
 }
