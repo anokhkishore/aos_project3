@@ -22,7 +22,7 @@ int main(int argc, char** argv) {
     num_max_threads = 4;
   }
   else {
-    server_addr = "0.0.0.0:50053";
+    server_addr = "0.0.0.0:50058";
     num_max_threads = 4;
   }
 

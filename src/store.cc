@@ -26,25 +26,23 @@ public:
     BidQuery query;
 	BidReply reply;
 	Status status;
-	const std::unique_ptr<Vendor::Stub> *pstub;  // pointer to a unique_ptr !
+	const std::unique_ptr<Vendor::Stub> *pstub;  // pointer to a std::unique_ptr !
 	std::promise<bool> done_promise; 
 };
 
 void vendor_request_handler(void *arg) {
-	VendorRequestWrapper *req = (VendorRequestWrapper*) arg;
+	VendorRequestWrapper *preq = (VendorRequestWrapper*) arg;
 
 	ClientContext context;
-	const std::unique_ptr<Vendor::Stub> *pstub = req->pstub;
+	const std::unique_ptr<Vendor::Stub> *pstub = preq->pstub;
+	std::cout << "Sending vendor request for product = " << preq->query.product_name() << std::endl;
 
-	req->status = (*pstub)->getProductBid(&context, req->query, &(req->reply));
-    
-	/*
- 	if (!status.ok()) {
-		std::cout << status.error_code() << ": " << status.error_message() << std::endl;		
+	preq->status = (*pstub)->getProductBid(&context, preq->query, &(preq->reply));
+ 	if (!preq->status.ok()) {
+		std::cout << preq->status.error_code() << ": " << preq->status.error_message() << std::endl;		
 	}
-	*/
 
-	req->done_promise.set_value(true);
+	preq->done_promise.set_value(true);
 }
 
 class StoreImpl : public Store::Service{
@@ -58,20 +56,27 @@ public:
 
 	Status getProducts(ServerContext* context, const ProductQuery* request,
                   ProductReply* reply) override {
-		
+		// std::cout << "Starting getProducts for " << request->product_name() << std::endl;  
 		std::vector<VendorRequestWrapper> reqs;
+		int i = 0;
 		for(const auto& stub : stubs_) {
+			if (3 == i || 2 == i) {
 		    reqs.emplace_back();
 			auto& req = reqs.back();
 			req.query.set_product_name(request->product_name());
 			req.pstub = &stub;
+			// std::cout << "Enqueueing vendor request for " << request->product_name() << std::endl;  
+			std::cout << "req ptr = " << &req << " pstub = " << &stub << std::endl;
 			tp_vendor_request.enqueue_task(&req);
+			}
+			++i;
 		}		
 
 		for(auto& req: reqs) {
 		    std::future<bool> done = req.done_promise.get_future();
 			done.get();
 			if (!req.status.ok()) {
+				std::cout << "Error :" << req.status.error_message() <<"with request for " << req.query.product_name() << std::endl;
 				continue;
 			}
 
@@ -132,8 +137,10 @@ int main(int argc, char** argv) {
 		myfile.close();
 	}
     
+	std::cout << "size of vendor_server_addrs = " << vendor_server_addrs.size() << std::endl;
 	std::vector<std::shared_ptr<Channel>> vendor_channels;
 	for(const auto& server_addr: vendor_server_addrs) {
+		std::cout << "Creating channel for vendor ip address " << server_addr << std::endl;
         vendor_channels.push_back(grpc::CreateChannel(server_addr, grpc::InsecureChannelCredentials()));
 	}
 
