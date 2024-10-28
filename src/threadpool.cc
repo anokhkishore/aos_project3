@@ -10,16 +10,17 @@ threadpool::threadpool(int num_threads, void (*thread_function)(void*))
 
 void threadpool::thread_function_wrapper(void * arg) {
     while (!stop_workers) {
-        std::unique_lock<std::mutex> lock(mtx_);
-        cv_.wait(lock, [this]{ return !task_queue.empty() || stop_workers; });
-        if (task_queue.empty()) {
-            continue;
+       {
+            std::unique_lock<std::mutex> lock(mtx_);
+            cv_.wait(lock, [this]{ return !task_queue.empty() || stop_workers; });
+            if (!task_queue.empty()) {
+                void *args = task_queue.front();
+                task_queue.pop();
+                lock.unlock();
+                this->thread_function(args);
+                cv_task_done.notify_one();
+            }
         }
-        void *args = task_queue.front();
-        task_queue.pop();
-        lock.unlock();
-        this->thread_function(args);
-        cv_task_done.notify_one();
     }
 }
 
@@ -56,5 +57,4 @@ void threadpool::kill_threads(){
 threadpool::~threadpool() {
     printf("threadpool Destructor\n");
     kill_threads();
-    
 }

@@ -26,18 +26,27 @@ public:
     BidQuery query;
 	BidReply reply;
 	Status status;
-	const std::unique_ptr<Vendor::Stub> *pstub;  // pointer to a std::unique_ptr !
+	// const std::unique_ptr<Vendor::Stub> *pstub;  // pointer to a std::unique_ptr !
+	std::shared_ptr<Channel> channel;
 	std::promise<bool> done_promise; 
 };
 
+std::mutex global_mtx;
+
 void vendor_request_handler(void *arg) {
 	VendorRequestWrapper *preq = (VendorRequestWrapper*) arg;
-
 	ClientContext context;
-	const std::unique_ptr<Vendor::Stub> *pstub = preq->pstub;
-	std::cout << "Sending vendor request for product = " << preq->query.product_name() << std::endl;
 
-	preq->status = (*pstub)->getProductBid(&context, preq->query, &(preq->reply));
+	std::unique_ptr<Vendor::Stub> stub;
+	// const std::unique_ptr<Vendor::Stub> *pstub = preq->pstub;
+	{
+	    std::lock_guard<std::mutex> lock(global_mtx);
+        stub  = Vendor::NewStub(preq->channel);
+	}
+
+	std::cout << "Sending vendor request for product = " << preq->query.product_name() << std::endl;
+    
+	preq->status = stub->getProductBid(&context, preq->query, &(preq->reply));
  	if (!preq->status.ok()) {
 		std::cout << preq->status.error_code() << ": " << preq->status.error_message() << std::endl;		
 	}
@@ -47,42 +56,57 @@ void vendor_request_handler(void *arg) {
 
 class StoreImpl : public Store::Service{
 public:
-	StoreImpl(const std::vector<std::shared_ptr<Channel>>& vendor_channels, int request_workers=4, int vendor_workers=8)
-	  : tp_vendor_request(request_workers, vendor_request_handler) {
+	StoreImpl(std::vector<std::shared_ptr<Channel>>&& vendor_channels, int request_workers=4, int vendor_workers=8)
+	  : vendor_channels(vendor_channels), tp_vendor_request(request_workers, vendor_request_handler) {
+		/*
 		for(const auto& channel: vendor_channels) {
 		    stubs_.emplace_back(Vendor::NewStub(channel));
 		}
+		*/
 	  }
 
 	Status getProducts(ServerContext* context, const ProductQuery* request,
                   ProductReply* reply) override {
 		// std::cout << "Starting getProducts for " << request->product_name() << std::endl;  
-		std::vector<VendorRequestWrapper> reqs;
+		// std::vector<VendorRequestWrapper> reqs;
+		std::vector<std::shared_ptr<VendorRequestWrapper>> reqs;
 		int i = 0;
-		for(const auto& stub : stubs_) {
-			if (3 == i || 2 == i) {
-		    reqs.emplace_back();
-			auto& req = reqs.back();
-			req.query.set_product_name(request->product_name());
-			req.pstub = &stub;
+		std::vector<std::thread> vw;
+		for(const auto& vc : vendor_channels) {
+			if (i < 4) {
+		    // reqs.emplace_back();
+			// auto& req = reqs.back();
+			std::shared_ptr<VendorRequestWrapper> req = std::make_shared<VendorRequestWrapper>();
+			req->query.set_product_name(request->product_name());
+			// req.pstub = &stub;
+			req->channel = vc;
 			// std::cout << "Enqueueing vendor request for " << request->product_name() << std::endl;  
-			std::cout << "req ptr = " << &req << " pstub = " << &stub << std::endl;
-			tp_vendor_request.enqueue_task(&req);
+			// std::cout << "req ptr = " << &req << " pstub = " << &stub << std::endl;
+			tp_vendor_request.enqueue_task((void*)req.get());
+			// vw.push_back(std::thread(vendor_request_handler, (void*)req.get()));
+			reqs.push_back(req);
 			}
 			++i;
 		}		
+        
+		/*
+		for(auto& thread: vw) {
+			thread.join();
+		}
+		*/
 
 		for(auto& req: reqs) {
-		    std::future<bool> done = req.done_promise.get_future();
+		    std::future<bool> done = req->done_promise.get_future();
 			done.get();
-			if (!req.status.ok()) {
-				std::cout << "Error :" << req.status.error_message() <<"with request for " << req.query.product_name() << std::endl;
+
+			if (!req->status.ok()) {
+				std::cout << "Error :" << req->status.error_message() <<"with request for " << req->query.product_name() << std::endl;
 				continue;
 			}
 
 			auto* product = reply->mutable_products()->Add();
-			product->set_price((req.reply).price());
-			product->set_vendor_id((req.reply).vendor_id());
+			product->set_price(req->reply.price());
+			product->set_vendor_id(req->reply.vendor_id());
 		}
 
 		return Status::OK;
@@ -101,7 +125,8 @@ public:
 	}	
 
 private:
-    std::vector<std::unique_ptr<Vendor::Stub>> stubs_;
+    // std::vector<std::unique_ptr<Vendor::Stub>> stubs_;
+	std::vector<std::shared_ptr<Channel>>& vendor_channels;
 	threadpool tp_vendor_request;
 };
 
@@ -144,7 +169,7 @@ int main(int argc, char** argv) {
         vendor_channels.push_back(grpc::CreateChannel(server_addr, grpc::InsecureChannelCredentials()));
 	}
 
-	StoreImpl st(vendor_channels);
+	StoreImpl st(std::move(vendor_channels));
 	st.RunServer();
 
 	return EXIT_SUCCESS;
