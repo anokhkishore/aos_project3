@@ -26,7 +26,6 @@ public:
     BidQuery query;
 	BidReply reply;
 	Status status;
-	// const std::unique_ptr<Vendor::Stub> *pstub;  // pointer to a std::unique_ptr !
 	std::shared_ptr<Channel> channel;
 	std::promise<bool> done_promise; 
 };
@@ -37,13 +36,7 @@ void vendor_request_handler(void *arg) {
 	VendorRequestWrapper *preq = (VendorRequestWrapper*) arg;
 	ClientContext context;
 
-	std::unique_ptr<Vendor::Stub> stub;
-	// const std::unique_ptr<Vendor::Stub> *pstub = preq->pstub;
-	{
-	    std::lock_guard<std::mutex> lock(global_mtx);
-        stub  = Vendor::NewStub(preq->channel);
-	}
-
+	std::unique_ptr<Vendor::Stub> stub = Vendor::NewStub(preq->channel);
 	std::cout << "Sending vendor request for product = " << preq->query.product_name() << std::endl;
     
 	preq->status = stub->getProductBid(&context, preq->query, &(preq->reply));
@@ -58,42 +51,24 @@ class StoreImpl : public Store::Service{
 public:
 	StoreImpl(std::vector<std::shared_ptr<Channel>>&& vendor_channels, int request_workers=4, int vendor_workers=8)
 	  : vendor_channels(vendor_channels), tp_vendor_request(request_workers, vendor_request_handler) {
-		/*
-		for(const auto& channel: vendor_channels) {
-		    stubs_.emplace_back(Vendor::NewStub(channel));
-		}
-		*/
 	  }
 
 	Status getProducts(ServerContext* context, const ProductQuery* request,
                   ProductReply* reply) override {
-		// std::cout << "Starting getProducts for " << request->product_name() << std::endl;  
-		// std::vector<VendorRequestWrapper> reqs;
+		// std::cout << "Starting getProducts for " << request->product_name() << std::endl;
 		std::vector<std::shared_ptr<VendorRequestWrapper>> reqs;
 		int i = 0;
 		std::vector<std::thread> vw;
 		for(const auto& vc : vendor_channels) {
 			if (i < 4) {
-		    // reqs.emplace_back();
-			// auto& req = reqs.back();
 			std::shared_ptr<VendorRequestWrapper> req = std::make_shared<VendorRequestWrapper>();
 			req->query.set_product_name(request->product_name());
-			// req.pstub = &stub;
 			req->channel = vc;
-			// std::cout << "Enqueueing vendor request for " << request->product_name() << std::endl;  
-			// std::cout << "req ptr = " << &req << " pstub = " << &stub << std::endl;
 			tp_vendor_request.enqueue_task((void*)req.get());
-			// vw.push_back(std::thread(vendor_request_handler, (void*)req.get()));
 			reqs.push_back(req);
 			}
 			++i;
-		}		
-        
-		/*
-		for(auto& thread: vw) {
-			thread.join();
 		}
-		*/
 
 		for(auto& req: reqs) {
 		    std::future<bool> done = req->done_promise.get_future();
@@ -125,7 +100,6 @@ public:
 	}	
 
 private:
-    // std::vector<std::unique_ptr<Vendor::Stub>> stubs_;
 	std::vector<std::shared_ptr<Channel>>& vendor_channels;
 	threadpool tp_vendor_request;
 };
@@ -142,7 +116,7 @@ void tfn(void *arg) {
 }
 
 int main(int argc, char** argv) {
-	/*
+	/*  Test for threadpool working .. can add more stuff to check
 	std::cout << "I 'm not ready yet!" << std::endl;
 	threadpool pool(5, tfn);
 
