@@ -11,7 +11,9 @@
 
 
 using grpc::Channel;
+using grpc::ClientAsyncResponseReader;
 using grpc::ClientContext;
+using grpc::CompletionQueue;
 using grpc::Status;
 using grpc::ServerBuilder;
 using grpc::ServerContext;
@@ -74,6 +76,13 @@ public:
 	CallStatus status_;
 };
 
+struct BidData {
+	BidQuery bidQuery;
+	BidReply bidReply;
+	Status status;
+	CompletionQueue vcq; // vendor completion queue
+};
+
 void storeCallDataHandler(void *arg) {
 	StoreCallData *callData = (StoreCallData*) arg;
 	auto& vendor_channels = callData->vendor_channels_;
@@ -81,26 +90,40 @@ void storeCallDataHandler(void *arg) {
 	ProductQuery& request = callData->request;
 	auto& responder = callData->responder_;
 
+    ClientContext clientContext;
+
+    std::vector<std::shared_ptr<BidData>> vbidData;
+	std::unordered_map<void*, std::shared_ptr<BidData>> tags;
 	for (const auto& channel : vendor_channels) {
 		ClientContext clientContext;
-		BidQuery bidQuery;
-		BidReply bidReply;
+		vbidData.push_back(std::make_shared<BidData>());
+		auto& bdata = vbidData.back();
 
-		bidQuery.set_product_name(request.product_name());
+		bdata->bidQuery.set_product_name(request.product_name());
 		
 		std::unique_ptr<Vendor::Stub> stub = Vendor::NewStub(channel);
-		// std::cout << "Sending vendor request for product = " << bidQuery.product_name() << std::endl;
-		
-		Status status = stub->getProductBid(&clientContext, bidQuery, &bidReply);
-		if (!status.ok()) {
-			std::cout << status.error_code() << ": " << status.error_message() << std::endl;		
-		}
 
-		auto* product = reply.mutable_products()->Add();
-		product->set_price(bidReply.price());
-		product->set_vendor_id(bidReply.vendor_id());
+		std::unique_ptr<ClientAsyncResponseReader<BidReply>> rpc(stub->AsyncgetProductBid(&clientContext, bdata->bidQuery, &bdata->vcq));
+
+		tags[(void*)bdata.get()] = bdata;
+		rpc->Finish(&bdata->bidReply, &bdata->status, (void*)bdata.get());		
 	}
 
+	void* got_tag;
+    bool ok = false;
+	for (auto &bdata : vbidData) {
+		auto& vcq = bdata->vcq;
+		if (vcq.Next(&got_tag, &ok) && ok) {
+			if (tags.find(got_tag) != tags.end()) {
+				std::shared_ptr<BidData>& pdata = tags[got_tag];
+				const auto& bidReply = pdata->bidReply;
+				auto* product = reply.mutable_products()->Add();
+				product->set_price(bidReply.price());
+				product->set_vendor_id(bidReply.vendor_id());
+			}
+		}
+	}
+	
 	callData->status_ = callData->FINISH;
 	responder.Finish(reply, Status::OK, callData);
 }
