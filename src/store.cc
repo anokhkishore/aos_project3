@@ -3,6 +3,7 @@
 #include <iostream>
 #include <memory>
 #include <fstream>
+#include <cstdlib>
 
 #include <grpc/support/log.h>
 #include <grpcpp/grpcpp.h>
@@ -130,11 +131,11 @@ void storeCallDataHandler(void *arg) {
 
 class StoreImpl{
 public:
-	StoreImpl(std::vector<std::shared_ptr<Channel>>&& vendor_channels, int request_workers=4, int vendor_workers=8)
+	StoreImpl(std::vector<std::shared_ptr<Channel>>&& vendor_channels, int request_workers=4)
 	  : vendor_channels(vendor_channels), tp_process(request_workers, storeCallDataHandler) {
 	  }
 
-	void RunServer(const std::string& server_address = "0.0.0.0:50058") {
+	void RunServer(const std::string& server_address) {
 		// std::string server_address("0.0.0.0:50053");
 		ServerBuilder builder;
 		builder.AddListeningPort(server_address, grpc::InsecureServerCredentials());
@@ -171,8 +172,33 @@ private:
 
 
 int main(int argc, char** argv) {
+	int num_thread_workers = 4;
+	std::string ip_address = "0.0.0.0:50058";
+	std::string vendor_filename = "vendor_addresses.txt";
+
+    if (argc > 4 || argc < 2) {
+		std::cerr << "Correct usage: ./store $file_path_for_vendor_addrress [ip address:port to listen on clients] [max number of thread workers]" << std::endl;
+		return EXIT_FAILURE;
+	}
+
+	if (argc >= 4) {
+		num_thread_workers = std::atoi(std::string(argv[3]).c_str());
+	}
+	if (argc >= 3) {
+		ip_address = std::string(argv[2]);
+	}
+	if (argc >= 2) {
+		vendor_filename = std::string(argv[1]);
+	}
+
+	/*
+	/store <filepath for vendor addresses> \
+				<ip address:port to listen on for clients> \
+				<maximum number of threads in threadpool>
+	*/
+
     std::vector<std::string> vendor_server_addrs;
-    std::ifstream myfile ("vendor_addresses.txt");
+    std::ifstream myfile (vendor_filename);
 	if (myfile.is_open()) {
 		std::string ip_addr;
 		while (getline(myfile, ip_addr)) {
@@ -188,9 +214,8 @@ int main(int argc, char** argv) {
         vendor_channels.push_back(grpc::CreateChannel(server_addr, grpc::InsecureChannelCredentials()));
 	}
 
-	StoreImpl st(std::move(vendor_channels));
-	st.RunServer();
+	StoreImpl st(std::move(vendor_channels), num_thread_workers);
+	st.RunServer(ip_address);
 
 	return EXIT_SUCCESS;
 }
-
